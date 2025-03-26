@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>WebRTC Video &amp; Audio Messaging</title>
+  <title>WebRTC Video &amp; Audio Messaging with Share Link</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f2f2f2; }
     .container {
@@ -15,7 +15,7 @@
     }
     h2 { text-align: center; }
     video { width: 100%; max-width: 380px; background: #000; margin: 10px; }
-    textarea { width: 100%; height: 100px; margin: 10px 0; }
+    textarea, input[type="text"] { width: 100%; margin: 10px 0; padding: 8px; font-family: monospace; }
     button {
       padding: 10px 20px;
       margin: 5px;
@@ -27,26 +27,33 @@
     }
     button:hover { background: #0056b3; }
     label { font-weight: bold; }
+    .row { display: flex; flex-wrap: wrap; justify-content: space-around; }
+    .column { flex: 1; min-width: 300px; margin: 10px; }
+    .instructions { font-size: 0.9em; color: #555; }
   </style>
 </head>
 <body>
   <div class="container">
     <h2>WebRTC Video &amp; Audio Messaging</h2>
-    <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
-      <div>
+    <div class="row">
+      <div class="column">
         <h3>Local Video</h3>
         <video id="localVideo" autoplay muted></video>
       </div>
-      <div>
+      <div class="column">
         <h3>Remote Video</h3>
         <video id="remoteVideo" autoplay></video>
       </div>
     </div>
     <div style="text-align: center;">
       <button id="startButton">Start Camera</button>
-      <button id="createOfferButton">Create Offer</button>
+      <button id="generateLinkButton">Generate Share Link</button>
       <button id="createAnswerButton">Create Answer</button>
       <button id="connectButton">Connect</button>
+    </div>
+    <div>
+      <label for="shareLink">Share Link (for host to send to a friend):</label>
+      <input type="text" id="shareLink" readonly>
     </div>
     <div>
       <label for="localSDP">Local SDP (Offer/Answer):</label>
@@ -56,17 +63,38 @@
       <label for="remoteSDP">Remote SDP:</label>
       <textarea id="remoteSDP"></textarea>
     </div>
-    <p style="font-size: 0.9em; color: #555;">
-      Instructions: Open this file in two browser windows/devices. Click "Start Camera" on both. On one, click "Create Offer" and copy its Local SDP into the other window’s "Remote SDP" then click "Create Answer". Finally, copy that answer back into the first window’s "Remote SDP" and click "Connect".
+    <p class="instructions">
+      <strong>Usage:</strong><br>
+      1. Open this file in your browser and click “Start Camera”.<br>
+      2. If you are the host, click “Generate Share Link” to create an offer. Copy the generated link and send it to your friend.<br>
+      3. Your friend should open the link; the offer will load automatically. They then click “Create Answer” which generates an answer (displayed in Local SDP).<br>
+      4. The guest copies the answer and sends it back to you. You paste it into the “Remote SDP” field and click “Connect” to finish the setup.
     </p>
   </div>
 
   <script>
     let localStream, pc;
     const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
     const localVideo = document.getElementById('localVideo');
     const remoteVideo = document.getElementById('remoteVideo');
+    const startButton = document.getElementById('startButton');
+    const generateLinkButton = document.getElementById('generateLinkButton');
+    const createAnswerButton = document.getElementById('createAnswerButton');
+    const connectButton = document.getElementById('connectButton');
+    const shareLinkInput = document.getElementById('shareLink');
+    const localSDPText = document.getElementById('localSDP');
+    const remoteSDPText = document.getElementById('remoteSDP');
 
+    // Utility: Get URL parameter (for offer)
+    function getUrlParameter(name) {
+      name = name.replace(/[[]/, '\\[').replace(/[\]]/, '\\]');
+      const regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+      const results = regex.exec(window.location.search);
+      return results === null ? null : decodeURIComponent(results[1]);
+    }
+
+    // Start local camera and mic.
     async function startCamera() {
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -76,18 +104,18 @@
       }
     }
 
+    // Create a new RTCPeerConnection and add local tracks.
     function createPeerConnection() {
       pc = new RTCPeerConnection(configuration);
 
-      // Add local tracks to the peer connection.
       if (localStream) {
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
       }
 
-      // When ICE gathering is complete, output the local SDP.
+      // When ICE gathering is complete, update the local SDP.
       pc.onicecandidate = event => {
         if (!event.candidate) { // ICE gathering finished
-          document.getElementById('localSDP').value = JSON.stringify(pc.localDescription);
+          localSDPText.value = JSON.stringify(pc.localDescription);
         }
       };
 
@@ -97,29 +125,53 @@
       };
     }
 
-    document.getElementById('startButton').addEventListener('click', async () => {
-      await startCamera();
-      // Create a new peer connection if one doesn't already exist.
-      if (!pc) createPeerConnection();
-    });
+    // Check if the page was opened with an offer in the URL.
+    function checkForOfferInUrl() {
+      const offerParam = getUrlParameter('offer');
+      if (offerParam) {
+        try {
+          const offer = JSON.parse(offerParam);
+          // If an offer exists, prefill the Remote SDP for a joining guest.
+          remoteSDPText.value = JSON.stringify(offer, null, 2);
+          // Disable the "Generate Share Link" button for joiners.
+          generateLinkButton.disabled = true;
+        } catch (e) {
+          console.error('Invalid offer parameter in URL:', e);
+        }
+      }
+    }
 
-    // Caller: Create an offer.
-    document.getElementById('createOfferButton').addEventListener('click', async () => {
+    // Host: Generate an offer and produce a shareable link.
+    async function generateShareLink() {
       if (!pc) createPeerConnection();
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
+        // Wait for ICE gathering to complete
+        const checkIceComplete = () => {
+          if (pc.iceGatheringState === 'complete') {
+            const offerSDP = JSON.stringify(pc.localDescription);
+            // Encode the offer in the URL parameter
+            const encodedOffer = encodeURIComponent(offerSDP);
+            const currentUrl = window.location.href.split('?')[0];
+            const shareLink = `${currentUrl}?offer=${encodedOffer}`;
+            shareLinkInput.value = shareLink;
+          } else {
+            setTimeout(checkIceComplete, 100);
+          }
+        };
+        checkIceComplete();
       } catch (e) {
-        console.error('Error creating offer:', e);
+        console.error('Error generating share link:', e);
       }
-    });
+    }
 
-    // Callee: Use the remote offer to create an answer.
-    document.getElementById('createAnswerButton').addEventListener('click', async () => {
+    // Guest: Create an answer based on the offer in Remote SDP.
+    async function createAnswer() {
       if (!pc) createPeerConnection();
-      const remoteSDP = document.getElementById('remoteSDP').value;
+      const remoteSDP = remoteSDPText.value;
       if (!remoteSDP) {
-        alert('Please paste the remote SDP offer.');
+        alert('No remote SDP found. Please check the share link.');
         return;
       }
       try {
@@ -130,11 +182,11 @@
       } catch (e) {
         console.error('Error creating answer:', e);
       }
-    });
+    }
 
-    // Caller: Finalize connection with the remote answer.
-    document.getElementById('connectButton').addEventListener('click', async () => {
-      const remoteSDP = document.getElementById('remoteSDP').value;
+    // Host: Finalize connection using the answer from the guest.
+    async function connectRemote() {
+      const remoteSDP = remoteSDPText.value;
       if (!remoteSDP) {
         alert('Please paste the remote SDP answer.');
         return;
@@ -145,7 +197,15 @@
       } catch (e) {
         console.error('Error setting remote description:', e);
       }
-    });
+    }
+
+    startButton.addEventListener('click', startCamera);
+    generateLinkButton.addEventListener('click', generateShareLink);
+    createAnswerButton.addEventListener('click', createAnswer);
+    connectButton.addEventListener('click', connectRemote);
+
+    // On load, check if there's an offer in the URL (guest mode).
+    checkForOfferInUrl();
   </script>
 </body>
 </html>
