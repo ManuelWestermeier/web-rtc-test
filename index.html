@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Audio Call (No Libraries)</title>
+</head>
+<body>
+    <h1>WebRTC Audio Call</h1>
+    <p>Your ID: <span id="myId">Generating...</span></p>
+    <textarea id="offerBox" placeholder="Paste offer here"></textarea>
+    <button onclick="generateOffer()">Generate Offer</button>
+    <br><br>
+    <textarea id="answerBox" placeholder="Paste answer here"></textarea>
+    <button onclick="acceptOffer()">Accept Offer</button>
+
+    <script>
+        let peerConnection = new RTCPeerConnection();
+        let myId = Math.random().toString(36).substring(7); // Random ID
+        document.getElementById("myId").innerText = myId;
+
+        // Capture microphone audio
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+        });
+
+        // Handle incoming audio
+        peerConnection.ontrack = event => {
+            let audio = new Audio();
+            audio.srcObject = event.streams[0];
+            audio.play();
+        };
+
+        // Generate WebRTC offer
+        async function generateOffer() {
+            let offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            document.getElementById("offerBox").value = JSON.stringify(offer);
+        }
+
+        // Accept WebRTC offer
+        async function acceptOffer() {
+            let offer = JSON.parse(document.getElementById("offerBox").value);
+            await peerConnection.setRemoteDescription(offer);
+            
+            let answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            document.getElementById("answerBox").value = JSON.stringify(answer);
+        }
+
+        // Paste answer into first peer
+        async function finalizeConnection() {
+            let answer = JSON.parse(document.getElementById("answerBox").value);
+            await peerConnection.setRemoteDescription(answer);
+        }
+    </script>
+</body>
+</html>
