@@ -1,59 +1,151 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Audio Call (No Libraries)</title>
+  <meta charset="UTF-8">
+  <title>WebRTC Video &amp; Audio Messaging</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f2f2f2; }
+    .container {
+      max-width: 800px;
+      margin: auto;
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0px 2px 10px rgba(0,0,0,0.1);
+    }
+    h2 { text-align: center; }
+    video { width: 100%; max-width: 380px; background: #000; margin: 10px; }
+    textarea { width: 100%; height: 100px; margin: 10px 0; }
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background: #0056b3; }
+    label { font-weight: bold; }
+  </style>
 </head>
 <body>
-    <h1>WebRTC Audio Call</h1>
-    <p>Your ID: <span id="myId">Generating...</span></p>
-    <textarea id="offerBox" placeholder="Paste offer here"></textarea>
-    <button onclick="generateOffer()">Generate Offer</button>
-    <br><br>
-    <textarea id="answerBox" placeholder="Paste answer here"></textarea>
-    <button onclick="acceptOffer()">Accept Offer</button>
+  <div class="container">
+    <h2>WebRTC Video &amp; Audio Messaging</h2>
+    <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
+      <div>
+        <h3>Local Video</h3>
+        <video id="localVideo" autoplay muted></video>
+      </div>
+      <div>
+        <h3>Remote Video</h3>
+        <video id="remoteVideo" autoplay></video>
+      </div>
+    </div>
+    <div style="text-align: center;">
+      <button id="startButton">Start Camera</button>
+      <button id="createOfferButton">Create Offer</button>
+      <button id="createAnswerButton">Create Answer</button>
+      <button id="connectButton">Connect</button>
+    </div>
+    <div>
+      <label for="localSDP">Local SDP (Offer/Answer):</label>
+      <textarea id="localSDP" readonly></textarea>
+    </div>
+    <div>
+      <label for="remoteSDP">Remote SDP:</label>
+      <textarea id="remoteSDP"></textarea>
+    </div>
+    <p style="font-size: 0.9em; color: #555;">
+      Instructions: Open this file in two browser windows/devices. Click "Start Camera" on both. On one, click "Create Offer" and copy its Local SDP into the other window’s "Remote SDP" then click "Create Answer". Finally, copy that answer back into the first window’s "Remote SDP" and click "Connect".
+    </p>
+  </div>
 
-    <script>
-        let peerConnection = new RTCPeerConnection();
-        let myId = Math.random().toString(36).substring(7); // Random ID
-        document.getElementById("myId").innerText = myId;
+  <script>
+    let localStream, pc;
+    const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
 
-        // Capture microphone audio
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
-        });
+    async function startCamera() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+      } catch (e) {
+        alert('Error accessing media devices: ' + e);
+      }
+    }
 
-        // Handle incoming audio
-        peerConnection.ontrack = event => {
-            let audio = new Audio();
-            audio.srcObject = event.streams[0];
-            audio.play();
-        };
+    function createPeerConnection() {
+      pc = new RTCPeerConnection(configuration);
 
-        // Generate WebRTC offer
-        async function generateOffer() {
-            let offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            document.getElementById("offerBox").value = JSON.stringify(offer);
+      // Add local tracks to the peer connection.
+      if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      }
+
+      // When ICE gathering is complete, output the local SDP.
+      pc.onicecandidate = event => {
+        if (!event.candidate) { // ICE gathering finished
+          document.getElementById('localSDP').value = JSON.stringify(pc.localDescription);
         }
+      };
 
-        // Accept WebRTC offer
-        async function acceptOffer() {
-            let offer = JSON.parse(document.getElementById("offerBox").value);
-            await peerConnection.setRemoteDescription(offer);
-            
-            let answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            
-            document.getElementById("answerBox").value = JSON.stringify(answer);
-        }
+      // Display remote stream.
+      pc.ontrack = event => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+    }
 
-        // Paste answer into first peer
-        async function finalizeConnection() {
-            let answer = JSON.parse(document.getElementById("answerBox").value);
-            await peerConnection.setRemoteDescription(answer);
-        }
-    </script>
+    document.getElementById('startButton').addEventListener('click', async () => {
+      await startCamera();
+      // Create a new peer connection if one doesn't already exist.
+      if (!pc) createPeerConnection();
+    });
+
+    // Caller: Create an offer.
+    document.getElementById('createOfferButton').addEventListener('click', async () => {
+      if (!pc) createPeerConnection();
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+      } catch (e) {
+        console.error('Error creating offer:', e);
+      }
+    });
+
+    // Callee: Use the remote offer to create an answer.
+    document.getElementById('createAnswerButton').addEventListener('click', async () => {
+      if (!pc) createPeerConnection();
+      const remoteSDP = document.getElementById('remoteSDP').value;
+      if (!remoteSDP) {
+        alert('Please paste the remote SDP offer.');
+        return;
+      }
+      try {
+        const offer = JSON.parse(remoteSDP);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+      } catch (e) {
+        console.error('Error creating answer:', e);
+      }
+    });
+
+    // Caller: Finalize connection with the remote answer.
+    document.getElementById('connectButton').addEventListener('click', async () => {
+      const remoteSDP = document.getElementById('remoteSDP').value;
+      if (!remoteSDP) {
+        alert('Please paste the remote SDP answer.');
+        return;
+      }
+      try {
+        const desc = JSON.parse(remoteSDP);
+        await pc.setRemoteDescription(new RTCSessionDescription(desc));
+      } catch (e) {
+        console.error('Error setting remote description:', e);
+      }
+    });
+  </script>
 </body>
 </html>
